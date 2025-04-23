@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "RPi_Hat")(type "KiCad")(uri "${KIPRJMOD}/libraries/libraries/RPi_Hat.kicad_sym")(options "")(descr ""))
+  (lib (name "MP2338GTL")(type "KiCad")(uri "${KIPRJMOD}/libraries/libraries/MP2338GTL.kicad_sym")(options "")(descr ""))
+)
