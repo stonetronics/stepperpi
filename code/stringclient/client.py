@@ -2,7 +2,6 @@ import socket
 import threading
 import sys
 import signal
-import select
 
 running = 1
 
@@ -10,7 +9,6 @@ running = 1
 def stop_program(signum, frame):
     global running
     running = 0
-    #client_socket.shutdown(socket.SHUT_WR)
     print("detected ctrl+c, stopping program...")
 
 def sender_interface(client_socket):
