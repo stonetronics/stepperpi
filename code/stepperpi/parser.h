@@ -23,6 +23,7 @@ typedef struct {
     int                     direction;
     int                     steps;
     float                   speed;
+    float                   acceleration;
 } Stepper_Command;
 
 /* print a full stepper command*/

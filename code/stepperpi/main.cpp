@@ -206,14 +206,20 @@ void* stepper_thread(void* param) {
                     break;
 
                 case MOVE:
-                    toggle_interval_millis = Stepper::getToggleIntervalMillis(tmp_command.speed);
-                    actual_speed = Stepper::getStepsPerSecond(toggle_interval_millis);
                     cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction" << tmp_command.direction << endl;
-                    cout << "[stepperthread] requested speed " << tmp_command.speed << " steps/s; actual speed: " << actual_speed <<" steps/s" << endl;
                     cout << "[stepperthread] endswitches are obeyed!" << endl;
-                    sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; actual speed: %.2f steps/s; endswitches are obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed, actual_speed);
-                    si->transmit_buffer->write(msg);
-                    stepper_retval = si->stepper->step(tmp_command.direction, tmp_command.steps, toggle_interval_millis);
+
+                    //do the stepping
+                    if (tmp_command.acceleration <= 0) {
+                        sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; default acceleration; endswitches are obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed);
+                        si->transmit_buffer->write(msg);
+                        stepper_retval = si->stepper->step(tmp_command.direction, tmp_command.steps, tmp_command.speed);
+                    } else {
+                        sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; acceleration: %.2f steps/s/s; endswitches are obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed, tmp_command.acceleration);
+                        si->transmit_buffer->write(msg);
+                        stepper_retval = si->stepper->step(tmp_command.direction, tmp_command.steps, tmp_command.speed, tmp_command.acceleration);
+                    }
+                    //report
                     if (!stepper_retval) {
                         cout << "[stepperthread] stepping finished without endstops hitting!" << endl;
                         strcpy(msg.msg, "stepping finished without endstops hitting!");
@@ -227,17 +233,20 @@ void* stepper_thread(void* param) {
                     break;
 
                 case HARDMOVE:
-                    toggle_interval_millis = Stepper::getToggleIntervalMillis(tmp_command.speed);
-                    actual_speed = Stepper::getStepsPerSecond(toggle_interval_millis);
-                    cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction" << tmp_command.direction << endl;
-                    cout << "[stepperthread] requested speed " << tmp_command.speed << "steps/s; actual speed: " << actual_speed <<" steps/s" << endl;
-                    cout << "[stepperthread] endswitches are !!!NOT!!! obeyed!" << endl;
-                    sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; actual speed: %.2f steps/s; endswitches are !!!NOT!!! obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed, actual_speed);
-                    si->transmit_buffer->write(msg);
-                    si->stepper->hardstep(tmp_command.direction, tmp_command.steps, toggle_interval_millis);
-                    cout << "[stepperthread] finished stepping!" << endl;
-                    strcpy(msg.msg, "finished stepping!");
-                    si->transmit_buffer->write(msg);
+                    if (tmp_command.acceleration <= 0) {
+                        cout << "[stepperthread] cannot hardstep, missing acceleration!" << endl;
+                        strcpy(msg.msg, "cannot hardstep, missing acceleration!");
+                        si->transmit_buffer->write(msg);
+                    } else {
+                        cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction" << tmp_command.direction << endl;
+                        cout << "[stepperthread] endswitches are !!!NOT!!! obeyed!" << endl;
+                        sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; acceleration: %.2f steps/s/s; endswitches are !!!NOT!!! obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed, actual_speed);
+                        si->transmit_buffer->write(msg);
+                        si->stepper->step(tmp_command.direction, tmp_command.steps, tmp_command.speed, tmp_command.acceleration, false);
+                        cout << "[stepperthread] finished stepping!" << endl;
+                        strcpy(msg.msg, "finished stepping!");
+                        si->transmit_buffer->write(msg);
+                    }
                     break;
 
                 case DEBUG:

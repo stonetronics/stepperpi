@@ -4,6 +4,5 @@ build: clean bin
 bin:
 	mkdir bin
 
-clean:
+clean: bin
 	rm -f bin/*
-	rmdir bin

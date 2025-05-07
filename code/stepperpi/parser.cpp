@@ -42,12 +42,20 @@ int parse_stepper_command(char* toparse, Stepper_Command* thecommand) {
     if ( (thecommand->type == MOVE) or (thecommand->type == HARDMOVE) ){
         if ((the_token = strtok(NULL, delimiter)) != NULL)
             thecommand->direction = atoi(the_token); // get direction
+        else // could not parse! exit
+            return 1;
         if ((the_token = strtok(NULL, delimiter)) != NULL)
             thecommand->steps = atoi(the_token); // get steps
+        else // could not parse! exit
+            return 1;
         if ((the_token = strtok(NULL, delimiter)) != NULL)
             thecommand->speed = atof(the_token); // get speed
         else // could not parse! exit
             return 1;
+        if ((the_token = strtok(NULL, delimiter)) != NULL)
+            thecommand->acceleration = atof(the_token); // get acceleration
+        else
+            thecommand->acceleration = -1; //no acceleration given
     }
 
     return 0;
