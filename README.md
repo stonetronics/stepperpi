@@ -8,4 +8,4 @@ Each hw pin connection of both the stepper driver and endswitches is connected t
 An additional DC/DC converter is present on the board. It steps down the input voltage to the 5V needed by the raspberry pi, eliminating the need for a seperate USB power supply. The connection to the DC/DC converter is optional and can be enabled through a jumper. 
 
 ## code
-In the code directory, two subdirectories exist. One holds a python notebook for the analysis and development of the stepping algorithm and the other one holds a c++ project for the control of the stepper motor through the raspberry pi. please refer to the respective readme for further info.
+In the code directory, three subdirectories exist. One holds a jupyter notebook for the analysis and development of the stepping algorithm and the other one holds a c++ project for the control of the stepper motor on the raspberry pi through a socket interface. Another directory holds a client written in python which connects to the raspberry pi's socket and enables the user to send and receive string commands and messages. Please refer to the respective readme for further info.
