@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+
+# the executable of this project
+/bin/stepperpi
