@@ -24,6 +24,7 @@ download and install beforehand
 */
 #include <bcm2835.h>
 #include "stepper.h"
+#include "encoder.h"
 #include "parser.h"
 
 #include "pindef.h"
@@ -58,12 +59,14 @@ typedef struct {
     pthread_t   receive_thread_id;                  // receiver thread id
     pthread_t   transmit_thread_id;                 // transmission thread id
     pthread_t   stepper_thread_id;                  // stepper handling thread id
+    pthread_t   encoder_thread_id;                  // encoder thread id
     int server_port;                                // port to listen on
     int server_socket;                              // file descriptor of server socket
     int client_socket;                              // file descriptor of the client socket
     CircBuffer<Transmit_Msg>* transmit_buffer;      // buffer where transmissions are saved
     CircBuffer<Stepper_Command>* command_buffer;    // stepper command buffer
     Stepper* stepper;                               // the stepper
+    Encoder* encoder;                               // the encoder
     pthread_mutex_t client_lock;                    // lock for the client server
 } Server_Info;
 
@@ -166,6 +169,17 @@ void* receive_thread(void* param) {
     return (void*) "no error";
 }
 
+/*seperate thread for encoder*/
+void* encoder_thread(void* param) {
+    Server_Info* si = (Server_Info*) param; // get server infos
+    cout << "[encoderthread] encoder thread started!" << endl;
+    while (running) {
+        si->encoder->process();
+    }
+
+    return NULL;
+}
+
 /*Handle single stepper commands*/
 void* stepper_thread(void* param) {
     Server_Info* si = (Server_Info*) param; // get server infos
@@ -173,7 +187,12 @@ void* stepper_thread(void* param) {
     cout << "[stepperthread] stepper thread started!" << endl;
 
     int toggle_interval_millis;
-    float actual_speed;
+
+    int rotation_count_before;
+    int illegal_count_before;
+    int rotation_count_after;   //to store encoder counts before and after movement - to check wether the motor moves for real
+    int illegal_count_after;   
+
     int stepper_retval;
     Transmit_Msg msg;  //message to return
 
@@ -209,6 +228,10 @@ void* stepper_thread(void* param) {
                     cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction" << tmp_command.direction << endl;
                     cout << "[stepperthread] endswitches are obeyed!" << endl;
 
+                    // get encoder values before
+                    rotation_count_before = si->encoder->getRotationCount();
+                    illegal_count_before = si->encoder->getIllegalCount();
+
                     //do the stepping
                     if (tmp_command.acceleration <= 0) {
                         sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; default acceleration; endswitches are obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed);
@@ -220,6 +243,22 @@ void* stepper_thread(void* param) {
                         stepper_retval = si->stepper->step(tmp_command.direction, tmp_command.steps, tmp_command.speed, tmp_command.acceleration);
                     }
                     //report
+
+                    // get encoder values after
+                    rotation_count_after = si->encoder->getRotationCount();
+                    illegal_count_after = si->encoder->getIllegalCount();
+
+                    cout << "[stepperthread] rotation count: " << rotation_count_after << "; illegal count: " << illegal_count_after << ";" << endl;
+                    if ( (rotation_count_after == rotation_count_before) && (illegal_count_after == illegal_count_before) ) {
+                        cout << "[stepperthread] encoder did not recognize any movement! check motor/encoder - maybe hardware is not enabled?" << endl;
+                        sprintf(msg.msg, "Warning: encoder did not recognize any movement! rotation count: %d; illegal count: %d", rotation_count_after, illegal_count_after);
+                        si->transmit_buffer->write(msg);
+                    } else {
+                        sprintf(msg.msg, "Encoder recognized movement! rotation count: %d; illegal count: %d", rotation_count_after, illegal_count_after);
+                        si->transmit_buffer->write(msg);
+                    }
+
+
                     if (!stepper_retval) {
                         cout << "[stepperthread] stepping finished without endstops hitting!" << endl;
                         strcpy(msg.msg, "stepping finished without endstops hitting!");
@@ -240,7 +279,7 @@ void* stepper_thread(void* param) {
                     } else {
                         cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction" << tmp_command.direction << endl;
                         cout << "[stepperthread] endswitches are !!!NOT!!! obeyed!" << endl;
-                        sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; acceleration: %.2f steps/s/s; endswitches are !!!NOT!!! obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed, actual_speed);
+                        sprintf(msg.msg, "stepping %d steps in direction %d, requested speed: %.2f steps/s; acceleration: %.2f steps/s/s; endswitches are !!!NOT!!! obeyed!", tmp_command.steps, tmp_command.direction, tmp_command.speed, tmp_command.acceleration);
                         si->transmit_buffer->write(msg);
                         si->stepper->step(tmp_command.direction, tmp_command.steps, tmp_command.speed, tmp_command.acceleration, false);
                         cout << "[stepperthread] finished stepping!" << endl;
@@ -249,10 +288,26 @@ void* stepper_thread(void* param) {
                     }
                     break;
 
+                case ENCODER_RESET:
+                    si->encoder->resetCounters();
+                    cout << "[stepperthread] reset encoder values!" << endl;
+                    strcpy(msg.msg,  "reset encoder values!");
+                    si->transmit_buffer->write(msg);
+                    break;
+                    
+                case ENCODER_GET:
+                    rotation_count_before = si->encoder->getRotationCount(); //reuse variables, the "_before" doesnt mean anything here
+                    illegal_count_before = si->encoder->getIllegalCount();
+                    cout << "[stepperthread] got rotation count: " << rotation_count_before << "; and illegal count: " << illegal_count_before << ";" << endl;
+
+                    sprintf(msg.msg, "rotation count:%d; illegal count:%d;", rotation_count_before, illegal_count_before);
+                    si->transmit_buffer->write(msg);
+                    break;
+
                 case DEBUG:
                     stepper_retval = si->stepper->debug();
 
-                    sprintf(msg.msg, "DEBUG; DIR:%d, STEP:%d, nSLEEP:%d, nRESET:%d, nENABLE:%d, START_ENDSTOP:%d, END_ENDSTOP:%d", (stepper_retval&(1<<6))>>6, (stepper_retval&(1<<5))>>5, (stepper_retval&(1<<4))>>4, (stepper_retval&(1<<3))>>3, (stepper_retval&(1<<2))>>2,(stepper_retval&(1<<1))>>1, (stepper_retval&(1<<0))>>0);
+                    sprintf(msg.msg, "DEBUG; DIR:%d, STEP:%d, nSLEEP:%d, nRESET:%d, nENABLE:%d, START_ENDSTOP:%d, END_ENDSTOP:%d, rotation count:%d, illegal count:%d", (stepper_retval&(1<<6))>>6, (stepper_retval&(1<<5))>>5, (stepper_retval&(1<<4))>>4, (stepper_retval&(1<<3))>>3, (stepper_retval&(1<<2))>>2,(stepper_retval&(1<<1))>>1, (stepper_retval&(1<<0))>>0, si->encoder->getRotationCount(), si->encoder->getIllegalCount());
                     si->transmit_buffer->write(msg);
                     break;
 
@@ -330,6 +385,9 @@ int main()
     // setup stepper module
     Stepper stepper(A4988_DIR, A4988_STEP, A4988_nSLEEP, A4988_nRESET, A4988_nENABLE, ENDSTOP_START, ENDSTOP_STOP);
 
+    // setup encoder module
+    Encoder encoder(LIGHTBARRIER_A, LIGHTBARRIER_B);
+
     //init gpio lib
     if (!bcm2835_init()) {
         cout << "Unable to init GPIO." << endl;
@@ -358,6 +416,10 @@ int main()
     stepper.init();
     si.stepper = &stepper; //save to server info
 
+    //init encoder
+    encoder.init();
+    si.encoder = &encoder; //save to server info
+
     // set up mutex for threadsafety of the client server
     if (pthread_mutex_init(&(si.client_lock), NULL)!= 0) {
         cout << "[main] client server mutex initialization failed! " << endl;
@@ -365,6 +427,9 @@ int main()
 
     // set up stepper thread
     pthread_create(&(si.stepper_thread_id), NULL, &stepper_thread, &si);
+
+    // set up encoder thread
+    pthread_create(&(si.encoder_thread_id), NULL, &encoder_thread, &si);
 
     cout << "[main] DEBUG: " << si.server_port << "; " << si.server_socket << endl;
 
@@ -375,6 +440,7 @@ int main()
     void* receive_thread_return;
     void* transmit_thread_return;
     void* stepper_thread_return;
+    void* encoder_thread_return;
 
     while (running) {
         cout << "[main] Accepting connection on port " << si.server_port << "  with FD " << si.server_socket << endl;
@@ -424,6 +490,7 @@ int main()
         sleep(1); // sleep 1 second before accepting connections again
     }
     pthread_join(si.stepper_thread_id, &stepper_thread_return);
+    pthread_join(si.encoder_thread_id, &encoder_thread_return);
 
     close(si.client_socket);
     // shutdown socket

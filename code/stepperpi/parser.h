@@ -11,11 +11,13 @@ ENABLE                                                              // enable dr
 DISABLE                                                             // disable driver
 MOVE        <direction>:[0,1]   <steps>[int]     <speed>[float]     // move <steps> into <direction> at <speed>, respecting the endstop in the direction that is requested
 HARDMOVE    <direction>:[0,1]   <steps>[int]     <speed>[float]     // as move, but ignore end stops
+ENCODER_RESET                                                       // reset encoder counter
+ENCODER_GET                                                         // return encoder counter
 DEBUG                                                               // give debug information (which endstops are pushed)
 */
 
 typedef enum {
-    RESET, ENABLE, DISABLE, MOVE, HARDMOVE, DEBUG
+    RESET, ENABLE, DISABLE, MOVE, HARDMOVE, ENCODER_RESET, ENCODER_GET, DEBUG
 } Stepper_Command_Name;
 
 typedef struct {

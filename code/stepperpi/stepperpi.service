@@ -1,0 +1,15 @@
+[Unit]
+Description=stepperpi service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+User=pi
+ExecStart=/usr/bin/stepperpi
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
