@@ -21,6 +21,7 @@ def sender_interface(client_socket):
     while running:
         if message.lower().strip() == 'bye':
             running = 0
+            break
         client_socket.send(message.encode())  # send message
         try:
             message = input()  # again take input
@@ -41,8 +42,7 @@ def receiver_interface(client_socket):
     print("ended receiver thread!")
 
 
-def client_program(host):
-    port = 8000  # socket server port number
+def client_program(host, port):
 
     client_socket = socket.socket()  # instantiate
     client_socket.connect((host, port))  # connect to the server
@@ -61,13 +61,18 @@ def client_program(host):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2:
+    if len(sys.argv) == 3:
         host = sys.argv[1]
+        port = int(sys.argv[2])
+    elif len(sys.argv) == 2:
+        host = sys.argv[1]
+        port = 8000  # socket server port number
     else:
         host = "ENTER.DEFAULT.HOST_IP.HERE"
+        port = 8000  # socket server port number
 
     #ctrl+c handling    
     signal.signal(signal.SIGINT, stop_program)
     
-    print(f"connecting to host {host}")
-    client_program(host)
+    print(f"connecting to host {host}:{port}")
+    client_program(host, port)
