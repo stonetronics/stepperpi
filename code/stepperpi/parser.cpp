@@ -32,6 +32,10 @@ int parse_stepper_command(char* toparse, Stepper_Command* thecommand) {
         thecommand->type = MOVE;
     } else if ( !strcmp(the_token, "HARDMOVE") ) {
         thecommand->type = HARDMOVE;
+    } else if ( !strcmp(the_token, "ENCODER_RESET") ) {
+        thecommand->type = ENCODER_RESET;
+    } else if ( !strcmp(the_token, "ENCODER_GET") ) {
+        thecommand->type = ENCODER_GET;
     } else if ( !strcmp(the_token, "DEBUG") ) {
         thecommand->type = DEBUG;
     } else {  // didnt recognize command! exit
