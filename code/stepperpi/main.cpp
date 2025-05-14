@@ -16,6 +16,7 @@ using namespace std;
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
+#include <cmath>
 #include "CircBuffer.h"
 
 /*
@@ -36,6 +37,10 @@ download and install beforehand
 #define TRANSMIT_BUFFER_SIZE    128 // number of transmit messages that can be stored at once
 
 #define SERVER_PORT     8000
+
+typedef enum {
+    RIGHT = 0, LEFT = 1
+} Direction;
 
 /*
 GENERAL APPLICATION RUN & EXIT HANDLING
@@ -60,6 +65,7 @@ typedef struct {
     pthread_t   transmit_thread_id;                 // transmission thread id
     pthread_t   stepper_thread_id;                  // stepper handling thread id
     pthread_t   encoder_thread_id;                  // encoder thread id
+    pthread_t   manual_thread_id;                   // manual control thread id
     int server_port;                                // port to listen on
     int server_socket;                              // file descriptor of server socket
     int client_socket;                              // file descriptor of the client socket
@@ -69,7 +75,6 @@ typedef struct {
     Encoder* encoder;                               // the encoder
     pthread_mutex_t client_lock;                    // lock for the client server
 } Server_Info;
-
 
 /*socket open indicator*/
 volatile int socket_open;
@@ -112,7 +117,6 @@ void* transmit_thread(void* param) {
     return (void* ) "no error";
 
 }
-
 
 /*Receive handling*/
 void* receive_thread(void* param) {
@@ -225,7 +229,7 @@ void* stepper_thread(void* param) {
                     break;
 
                 case MOVE:
-                    cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction" << tmp_command.direction << endl;
+                    cout << "[stepperthread] stepping " << tmp_command.steps << " steps in direction " << tmp_command.direction << endl;
                     cout << "[stepperthread] endswitches are obeyed!" << endl;
 
                     // get encoder values before
@@ -326,6 +330,114 @@ void* stepper_thread(void* param) {
     return NULL;
 }
 
+/*Thread for manual control panel*/
+void* manual_thread(void* param) {
+    Server_Info* si = (Server_Info*) param; // get server infos
+    uint8_t en, en_before;
+    uint8_t l, l_before;
+    uint8_t r, r_before;
+    uint8_t dirbutton;
+    uint8_t endstop;
+    Direction direction;
+    bool stepper_enabled_before;
+    bool stepper_sleeping_before;
+
+    int stepcnt;
+    int step_duration_microseconds;
+    float velocity;
+    float max_v = 1200.0;
+    float accel = 1000.0;
+
+    cout << "[manualthread] manual thread started!" << endl;
+    
+    //get input levels initially
+    en = bcm2835_gpio_lev(MANUAL_ENABLE);
+    l = bcm2835_gpio_lev(MANUAL_LEFT);
+    r = bcm2835_gpio_lev(MANUAL_RIGHT);
+    en_before = en;
+    l_before = l;
+    r_before = r;
+    
+    while(running) {
+        // get input levels
+        en = bcm2835_gpio_lev(MANUAL_ENABLE);
+        l = bcm2835_gpio_lev(MANUAL_LEFT);
+        r = bcm2835_gpio_lev(MANUAL_RIGHT);
+        if (en != en_before){
+            if (!en) { //enable is being pressed - falling edge on en
+                // save enable state and enable stepper
+                stepper_enabled_before = si->stepper->isEnabled();
+                stepper_sleeping_before = si->stepper->isSleeping();
+                si->stepper->enable(true);
+                si->stepper->sleep(false);
+            } else { //enable is being released
+                //restore enable state
+                si->stepper->enable(stepper_enabled_before);
+                si->stepper->sleep(stepper_sleeping_before);
+            }
+        }
+        
+        if ((l != l_before) || (r != r_before)) {
+            if ( (!en) && ((!l) || (!r)) ) { //one of left or right button was pressed while en is pressed
+                if (!l) { // left button takes precedence over right button, set direction also to the stepper motor
+                    direction = LEFT;
+                    bcm2835_gpio_write(A4988_DIR, HIGH);
+                    cout << "[manualthread] manually turning left!" << endl;
+                } else {
+                    direction = RIGHT;
+                    bcm2835_gpio_write(A4988_DIR, LOW);
+                    cout << "[manualthread] manually turning right!" << endl;
+                }
+                
+                // step while the l or r button is pressed
+                stepcnt = 0;
+                velocity = 0.0;
+                do {
+                    //read the manual pins
+                    l = bcm2835_gpio_lev(MANUAL_LEFT);
+                    r = bcm2835_gpio_lev(MANUAL_RIGHT);
+                    en = bcm2835_gpio_lev(MANUAL_ENABLE);
+                    // select the button to use and read the endstop pin
+                    if (direction == LEFT) {
+                        dirbutton = l;
+                        endstop = bcm2835_gpio_lev(ENDSTOP_START);
+                        
+                    } else { 
+                        dirbutton = r;
+                        endstop = bcm2835_gpio_lev(ENDSTOP_STOP);
+                    }
+                    
+                    if (!endstop) //if the enddstop in the direction we want to rotate is pushed, stop stepping
+                        break;
+                    else {
+                        // step
+                        if (velocity < max_v) { // start ramp step
+                            step_duration_microseconds = (sqrt(2.0*(stepcnt+1)/accel) - sqrt(2.0*(stepcnt)/accel)) * 1000000.0;
+                            velocity += accel * step_duration_microseconds / 1000000.0;
+                        } else { // constant velocity step
+                            velocity = max_v;
+                            step_duration_microseconds = (1/velocity) * 1000000.0;
+                        }
+                        si->stepper->pulse_step(step_duration_microseconds);
+                    }
+                    
+                    stepcnt++;
+                } while ( (!dirbutton) && (!en) );
+                // just stop apruptly when the button is released
+                cout << "[manualthread] stopped manual movement!, stepped " << stepcnt << " steps" << endl;
+            }
+        }
+
+        //store current pin states for edge detection
+        en_before = en;
+        l_before = l;
+        r_before = r;
+
+    }
+    return NULL;
+}
+
+
 /*set up the server socket*/
 void setup_socket(Server_Info* ti) {
 
@@ -410,16 +522,22 @@ int main()
     bcm2835_gpio_fsel(LED2_PIN, BCM2835_GPIO_FSEL_OUTP);
     bcm2835_gpio_write(LED1_PIN, LOW);
     bcm2835_gpio_write(LED2_PIN, LOW);
-
-
+    
+    // init manual control panel pins
+    bcm2835_gpio_fsel(MANUAL_LED, BCM2835_GPIO_FSEL_OUTP);
+    bcm2835_gpio_write(MANUAL_LED, LOW);
+    bcm2835_gpio_fsel(MANUAL_ENABLE, BCM2835_GPIO_FSEL_INPT);
+    bcm2835_gpio_fsel(MANUAL_LEFT, BCM2835_GPIO_FSEL_INPT);
+    bcm2835_gpio_fsel(MANUAL_RIGHT, BCM2835_GPIO_FSEL_INPT);
+    
     //init stepper
     stepper.init();
     si.stepper = &stepper; //save to server info
-
+    
     //init encoder
     encoder.init();
     si.encoder = &encoder; //save to server info
-
+    
     // set up mutex for threadsafety of the client server
     if (pthread_mutex_init(&(si.client_lock), NULL)!= 0) {
         cout << "[main] client server mutex initialization failed! " << endl;
@@ -430,23 +548,30 @@ int main()
 
     // set up encoder thread
     pthread_create(&(si.encoder_thread_id), NULL, &encoder_thread, &si);
+    
+    // set up manual control thread
+    pthread_create(&(si.manual_thread_id), NULL, &manual_thread, &si);
 
+    //signal that the program is running and ready to accept manual commands
+    bcm2835_gpio_write(MANUAL_LED, HIGH);
+    
     cout << "[main] DEBUG: " << si.server_port << "; " << si.server_socket << endl;
-
+    
     struct sockaddr_in client; // for recording the client infos
     unsigned int namelen;
 
-    // return values
+    // return values for all threads
     void* receive_thread_return;
     void* transmit_thread_return;
     void* stepper_thread_return;
     void* encoder_thread_return;
-
+    void* manual_thread_return;
+    
     while (running) {
         cout << "[main] Accepting connection on port " << si.server_port << "  with FD " << si.server_socket << endl;
         //signal that the server accepts connections on LED1
         bcm2835_gpio_write(LED1_PIN, HIGH);
-
+        
         // get the lenght of the client info
         namelen = sizeof(client);
         
@@ -460,22 +585,22 @@ int main()
             // signal that a connection was accepted on LED2
             bcm2835_gpio_write(LED2_PIN, HIGH);
         }
-
+        
         socket_open = 1;
         //reset the transmit buffer before starting threads
         si.transmit_buffer->reset();
         //with the accepted connection, start the receiving and transmitting thread
         pthread_create(&(si.receive_thread_id), NULL, &receive_thread, &si);
         pthread_create(&(si.transmit_thread_id), NULL, &transmit_thread, &si);
-
-
+        
+        
         /* for debug
         pthread_t debug_thread_id;
         pthread_create(&debug_thread_id, NULL, &debug_transmitter, &si);
         void* debug_thread_return;
         pthread_join(debug_thread_id, &debug_thread_return);
         cout << "[main] debg thread stopped, exited with return: " << (char*) debug_thread_return << endl;*/
-
+        
         // wait for transmission and reception thread to finish
         pthread_join(si.receive_thread_id, &receive_thread_return);
         cout << "[main] receiver thread stopped, exited with return: " << (char*) receive_thread_return << endl;
@@ -485,18 +610,23 @@ int main()
         //signal that no accepting is done right now and no connection is given on the socket
         bcm2835_gpio_write(LED1_PIN, LOW);
         bcm2835_gpio_write(LED2_PIN, LOW);
-
-
+        
+        
         sleep(1); // sleep 1 second before accepting connections again
     }
+
+    //signal that the program is stopped
+    bcm2835_gpio_write(MANUAL_LED, LOW);
+
     pthread_join(si.stepper_thread_id, &stepper_thread_return);
     pthread_join(si.encoder_thread_id, &encoder_thread_return);
-
+    pthread_join(si.manual_thread_id, &manual_thread_return);
+    
     close(si.client_socket);
     // shutdown socket
     shutdown(si.server_socket, SHUT_RDWR);
     close(si.server_socket);
-
+    
     // release stepper control
     stepper.sleep(true);
     stepper.enable(false);

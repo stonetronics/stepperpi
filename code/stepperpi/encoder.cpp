@@ -16,24 +16,23 @@ Encoder::Encoder(int pin_a, int pin_b, bool reverse_direction) {
         this->directionMultiplier = -1;
     else
         this->directionMultiplier = 1;
+
+    if (pthread_mutex_init(&(this->lock), NULL)!= 0) 
+    {
+        cout << "[encoder]  mutex initialization failed! " << endl;
+    }
 }
 
 void Encoder::init( void ) {
     //init IOs
     bcm2835_gpio_fsel(this->pin_a, BCM2835_GPIO_FSEL_INPT);
     bcm2835_gpio_fsel(this->pin_b, BCM2835_GPIO_FSEL_INPT); 
-
     //read IOs for the first time
     this->pin_a_level_before = bcm2835_gpio_lev(this->pin_a);
     this->pin_b_level_before = bcm2835_gpio_lev(this->pin_b);
 
     //initialize counters
     this->resetCounters();
-
-    if (pthread_mutex_init(&(this->lock), NULL)!= 0) 
-    {
-        cout << "[encoder]  mutex initialization failed! " << endl;
-    }
 
     cout << "[encoder] initialized!" << endl;
 }

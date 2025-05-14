@@ -17,6 +17,11 @@ Stepper::Stepper( int pin_dir, int pin_step, int pin_nsleep, int pin_nreset, int
     this -> pin_start_endstop = pin_start_endstop;
     this -> pin_end_endstop = pin_end_endstop;
     this -> standard_acceleration = standard_acceleration;
+
+    if (pthread_mutex_init(&(this->lock), NULL)!= 0) 
+    {
+        cout << "[stepper]  mutex initialization failed! " << endl;
+    }
 }
 
 void Stepper::init(void ) {
@@ -39,6 +44,7 @@ void Stepper::init(void ) {
 }
 
 void Stepper::enable(bool enabled) {
+    pthread_mutex_lock(&(this->lock));
     if (enabled) {
         //enable driver
         cout << "[stepper] enable" << endl;
@@ -47,6 +53,15 @@ void Stepper::enable(bool enabled) {
         cout << "[stepper] disable" << endl;
         bcm2835_gpio_write(this->pin_nenable, HIGH);
     }
+    pthread_mutex_unlock(&(this->lock));
+}
+
+bool Stepper::isEnabled( void ) {
+    uint8_t enablepin = bcm2835_gpio_lev(this->pin_nenable);
+    if (enablepin == LOW)
+        return true;
+    else
+        return false;
 }
 
 int Stepper::step(int direction, int steps, float steprate) {
@@ -60,6 +75,8 @@ int Stepper::step(int direction, int steps, float steprate, float acceleration) 
 int Stepper::step(int direction, int steps, float steprate, float acceleration, bool obey_endstops) {
     int pin_endstop;
     int stepno = 0;
+
+    pthread_mutex_lock(&(this->lock)); // lock mutex so nobody else can step
 
     if (direction) {
         cout << "[stepper] setting direction clockwise (end to start)" << endl;
@@ -90,7 +107,7 @@ int Stepper::step(int direction, int steps, float steprate, float acceleration, 
         step_duration_microseconds = (sqrt(2.0*(i+1)/acceleration) - sqrt(2.0*(i)/acceleration)) * 1000000.0;
         if (obey_endstops && (bcm2835_gpio_lev(pin_endstop) == LOW)) //if the enddstop in the direction we want to rotate is pushed, stop stepping
             break;
-        this->pulse_step(step_duration_microseconds);
+        this->pulse_step_unsafe(step_duration_microseconds);
         i++;
         stepno++;
     }
@@ -101,7 +118,7 @@ int Stepper::step(int direction, int steps, float steprate, float acceleration, 
     while (i++ < no_const_steps) {
         if (obey_endstops && (bcm2835_gpio_lev(pin_endstop) == LOW)) //if the enddstop in the direction we want to rotate is pushed, stop stepping
             break;
-        this->pulse_step(step_duration_microseconds);
+        this->pulse_step_unsafe(step_duration_microseconds);
         stepno++;
     }
 
@@ -113,14 +130,16 @@ int Stepper::step(int direction, int steps, float steprate, float acceleration, 
         step_duration_microseconds = (sqrt(2.0*(i+1)/acceleration) - sqrt(2.0*(i)/acceleration)) * 1000000.0;
         if (obey_endstops && (bcm2835_gpio_lev(pin_endstop) == LOW)) //if the enddstop in the direction we want to rotate is pushed, stop stepping
             break;
-        this->pulse_step(step_duration_microseconds);
+        this->pulse_step_unsafe(step_duration_microseconds);
         i--;
         stepno++;
     }
 
-    printf("[DEBUG] stepno: %d\n", stepno);
+    //cout << "[DEBUG] stepno: " << stepno << endl;
 
     bcm2835_gpio_write(this->pin_step, LOW);
+    
+    pthread_mutex_unlock(&(this->lock));
 
     if (--stepno == steps) {
         cout << "[stepper] stepping finished without running into endstop!" << endl;
@@ -130,17 +149,21 @@ int Stepper::step(int direction, int steps, float steprate, float acceleration, 
         cout << "[stepper] stepped " << stepno << " of " << steps << " steps" << endl;  
         return 1;
     }
+
 }
 
 void Stepper::reset(void) {
     //enable driver
+    pthread_mutex_lock(&(this->lock));
     cout << "[stepper] resetting stepper driver" << endl;
     bcm2835_gpio_write(this->pin_nreset, LOW);
     bcm2835_delay(10);
     bcm2835_gpio_write(this->pin_nreset, HIGH);
+    pthread_mutex_unlock(&(this->lock));
 }
 
 void Stepper::sleep(bool sleep) {
+    pthread_mutex_lock(&(this->lock));
     if (sleep) {
         cout << "[stepper] enter sleep" << endl;
         bcm2835_gpio_write(this->pin_nsleep, LOW);
@@ -148,6 +171,15 @@ void Stepper::sleep(bool sleep) {
         cout << "[stepper] waking up" << endl;
         bcm2835_gpio_write(this->pin_nsleep, HIGH);
     }
+    pthread_mutex_unlock(&(this->lock));
+}
+
+bool Stepper::isSleeping( void ) {
+    uint8_t sleeppin = bcm2835_gpio_lev(this->pin_nsleep);
+    if (sleeppin == LOW)
+        return true;
+    else
+        return false;
 }
 
 int Stepper::debug( void ) {
@@ -172,6 +204,12 @@ int Stepper::debug( void ) {
 }
 
 void Stepper::pulse_step(float microseconds) {
+    pthread_mutex_lock(&(this->lock));
+    pulse_step_unsafe(microseconds);
+    pthread_mutex_unlock(&(this->lock));
+}
+
+void Stepper::pulse_step_unsafe(float microseconds) {
     //calculate toggle intervals
     int toggle_interval1 = (int)(microseconds/2.0);
     int toggle_interval2 = toggle_interval1;
